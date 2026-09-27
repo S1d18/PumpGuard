@@ -1,0 +1,147 @@
+<Window x:Class="PumpGuard.Widget.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="PumpGuard" WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ShowInTaskbar="False" ResizeMode="NoResize" SizeToContent="WidthAndHeight"
+        FontFamily="Segoe UI" TextOptions.TextFormattingMode="Display"
+        MouseLeftButtonDown="OnDrag" MouseMove="OnDockedMouseMove" MouseLeftButtonUp="OnDockedMouseUp"
+        LocationChanged="OnMoved" SizeChanged="OnSizeChanged">
+    <Window.Resources>
+        <ItemsPanelTemplate x:Key="StackedGroups">
+            <StackPanel Orientation="Vertical" />
+        </ItemsPanelTemplate>
+        <ItemsPanelTemplate x:Key="SideBySideGroups">
+            <StackPanel Orientation="Horizontal" />
+        </ItemsPanelTemplate>
+    </Window.Resources>
+
+    <Border x:Name="Card" CornerRadius="12" Background="#E6161A1F" BorderBrush="#33FFFFFF" BorderThickness="1" Padding="16,12" Width="330">
+        <Border.ContextMenu>
+            <ContextMenu Opened="OnMenuOpened">
+                <MenuItem Header="Вид">
+                    <MenuItem x:Name="ViewCompactItem" Header="Полоска" IsCheckable="True" Click="OnViewCompact" />
+                    <MenuItem x:Name="ViewNormalItem" Header="Обычный" IsCheckable="True" Click="OnViewNormal" />
+                    <MenuItem x:Name="ViewWideItem" Header="Широкий" IsCheckable="True" Click="OnViewWide" />
+                    <Separator />
+                    <MenuItem x:Name="ViewBarTopItem" Header="Панель вдоль экрана сверху" IsCheckable="True" Click="OnViewBarTop" />
+                    <MenuItem x:Name="ViewBarBottomItem" Header="Панель вдоль экрана снизу" IsCheckable="True" Click="OnViewBarBottom" />
+                    <MenuItem x:Name="ViewBarLeftItem" Header="Панель сбоку слева" IsCheckable="True" Click="OnViewBarLeft" />
+                    <MenuItem x:Name="ViewBarRightItem" Header="Панель сбоку справа" IsCheckable="True" Click="OnViewBarRight" />
+                    <MenuItem x:Name="SideNarrowItem" Header="Узкая боковая панель" IsCheckable="True" Click="OnToggleSideNarrow" />
+                    <MenuItem x:Name="BarReserveItem" Header="Окна не перекрывают панель" IsCheckable="True" Click="OnToggleBarReserve" />
+                </MenuItem>
+                <MenuItem x:Name="PresetMenu" Header="Пресет вентиляторов" />
+                <MenuItem Header="Управление вентиляторами…" Click="OnOpenFans" />
+                <Separator />
+                <MenuItem x:Name="TopmostItem" Header="Поверх всех окон" IsCheckable="True" Click="OnToggleTopmost" />
+                <MenuItem x:Name="AutostartItem" Header="Запускать при входе в Windows" IsCheckable="True" Click="OnToggleAutostart" />
+                <MenuItem Header="Открыть статус (JSON)" Click="OnOpenApi" />
+                <Separator />
+                <MenuItem Header="Закрыть виджет" Click="OnExit" />
+            </ContextMenu>
+        </Border.ContextMenu>
+
+        <Grid>
+            <!-- Strip: one line of the key numbers -->
+            <StackPanel x:Name="CompactContent" Orientation="Horizontal" Visibility="Collapsed">
+                <Ellipse x:Name="CompactDot" Width="8" Height="8" Fill="{StaticResource Muted}" VerticalAlignment="Center" Margin="0,0,10,0" />
+                <StackPanel x:Name="CompactItems" Orientation="Horizontal" VerticalAlignment="Center" />
+            </StackPanel>
+
+            <!-- Narrow side column: one tile per block -->
+            <StackPanel x:Name="NarrowContent" Visibility="Collapsed">
+                <DockPanel Margin="0,0,0,10">
+                    <Ellipse x:Name="NarrowDot" Width="8" Height="8" Fill="{StaticResource Muted}" VerticalAlignment="Center" Margin="0,0,6,0" />
+                    <TextBlock Text="PumpGuard" Foreground="{StaticResource Text}" FontWeight="SemiBold" FontSize="11" VerticalAlignment="Center" />
+                </DockPanel>
+                <Border x:Name="NarrowAlarm" Visibility="Collapsed" Background="#CC8B1A1A" CornerRadius="6" Padding="6" Margin="0,0,0,10">
+                    <StackPanel>
+                        <TextBlock x:Name="NarrowAlarmText" Foreground="White" FontSize="12" FontWeight="Bold" TextWrapping="Wrap" />
+                        <Button x:Name="NarrowCancelButton" Content="Отмена" Click="OnCancel" Margin="0,6,0,0" Cursor="Hand" />
+                    </StackPanel>
+                </Border>
+                <StackPanel x:Name="NarrowItems" />
+                <TextBlock x:Name="NarrowState" Foreground="{StaticResource Muted}" FontSize="10" TextWrapping="Wrap" Margin="0,6,0,0" />
+            </StackPanel>
+
+            <!-- Full-width bar along a screen edge -->
+            <DockPanel x:Name="BarContent" Visibility="Collapsed" LastChildFill="False" VerticalAlignment="Center">
+                <Ellipse x:Name="BarDot" Width="8" Height="8" Fill="{StaticResource Muted}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                <TextBlock Text="PumpGuard" Foreground="{StaticResource Text}" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center" Margin="0,0,4,0" />
+                <StackPanel x:Name="BarItems" Orientation="Horizontal" VerticalAlignment="Center" />
+                <TextBlock x:Name="BarState" DockPanel.Dock="Right" Foreground="{StaticResource Muted}" FontSize="11" VerticalAlignment="Center" Margin="12,0,0,0" />
+                <StackPanel x:Name="BarAlarm" DockPanel.Dock="Right" Orientation="Horizontal" Visibility="Collapsed" VerticalAlignment="Center">
+                    <TextBlock x:Name="BarAlarmText" Foreground="White" FontSize="12" FontWeight="Bold" VerticalAlignment="Center" />
+                    <Button x:Name="BarCancelButton" Content="Отменить выключение" Click="OnCancel" Padding="8,1" Margin="10,0,0,0" Cursor="Hand" />
+                </StackPanel>
+            </DockPanel>
+
+            <StackPanel x:Name="FullContent">
+                <DockPanel Margin="0,0,0,8">
+                    <Ellipse x:Name="StateDot" Width="9" Height="9" Fill="{StaticResource Muted}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <TextBlock x:Name="StateText" DockPanel.Dock="Right" Foreground="{StaticResource Muted}" FontSize="11" VerticalAlignment="Center" />
+                    <TextBlock Text="PumpGuard" Foreground="{StaticResource Text}" FontWeight="SemiBold" FontSize="13" />
+                </DockPanel>
+
+                <DockPanel Margin="0,0,0,6">
+                    <StackPanel DockPanel.Dock="Right" VerticalAlignment="Bottom" Margin="0,0,0,5">
+                        <Border x:Name="PumpSparkHost" Width="110" Height="26" Background="Transparent" ToolTip="{Binding ElementName=PumpSpark, Path=Tag}">
+                            <Polyline x:Name="PumpSpark" Stroke="{StaticResource Series}" StrokeThickness="1.5" StrokeLineJoin="Round" />
+                        </Border>
+                        <TextBlock x:Name="PumpSub" Foreground="{StaticResource Muted}" FontSize="11" HorizontalAlignment="Right" />
+                    </StackPanel>
+                    <StackPanel>
+                        <TextBlock Text="ПОМПА" Foreground="{StaticResource Muted}" FontSize="10" FontWeight="SemiBold" />
+                        <TextBlock>
+                            <Run x:Name="PumpRpm" Text="—" FontSize="30" FontWeight="Light" Foreground="{StaticResource Text}" />
+                            <Run Text=" об/мин" FontSize="12" Foreground="{StaticResource Muted}" />
+                        </TextBlock>
+                    </StackPanel>
+                </DockPanel>
+
+                <ItemsControl x:Name="Groups" ItemsPanel="{StaticResource StackedGroups}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Width="{Binding Width}" Margin="{Binding Margin}">
+                                <TextBlock Text="{Binding Title}" Foreground="{StaticResource Muted}" FontSize="10" FontWeight="SemiBold" Margin="0,8,0,2" />
+                                <ItemsControl ItemsSource="{Binding Rows}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="0,1">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" MinWidth="64" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="{Binding Name}" Foreground="{StaticResource Text}" FontSize="12" Margin="8,0,0,0" VerticalAlignment="Center" />
+                                                <Ellipse Grid.Column="1" Width="7" Height="7" Fill="{Binding Dot}" VerticalAlignment="Center" Margin="6,0,0,0" />
+                                                <TextBlock Grid.Column="2" Text="{Binding Value}" Foreground="{StaticResource Text}" FontSize="12" FontWeight="SemiBold"
+                                                           HorizontalAlignment="Right" VerticalAlignment="Center" />
+                                                <!-- Transparent host = hover target larger than the 1.5px line -->
+                                                <Border Grid.Column="3" Width="{Binding SparkWidth}" Height="{Binding SparkHeight}" Margin="10,0,0,0"
+                                                        Background="Transparent" ToolTip="{Binding SparkTip}">
+                                                    <Polyline Points="{Binding Spark}" Stroke="{StaticResource Series}" StrokeThickness="1.5" StrokeLineJoin="Round" />
+                                                </Border>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <Border x:Name="AlarmPanel" Visibility="Collapsed" Background="#CC8B1A1A" CornerRadius="8" Padding="10,8" Margin="0,10,0,0">
+                    <StackPanel>
+                        <TextBlock x:Name="AlarmText" Foreground="White" FontSize="12" TextWrapping="Wrap" />
+                        <TextBlock x:Name="CountdownText" Foreground="White" FontSize="17" FontWeight="Bold" TextWrapping="Wrap" Margin="0,4" />
+                        <Button x:Name="CancelButton" Content="Отменить выключение" Click="OnCancel" Padding="8,4" Cursor="Hand" HorizontalAlignment="Left" />
+                    </StackPanel>
+                </Border>
+
+                <TextBlock x:Name="Footer" Foreground="{StaticResource Muted}" FontSize="10" TextWrapping="Wrap" Margin="0,8,0,0" />
+            </StackPanel>
+        </Grid>
+    </Border>
+</Window>

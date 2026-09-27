@@ -1,0 +1,15 @@
+<Application x:Class="PumpGuard.Widget.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             ShutdownMode="OnMainWindowClose">
+    <Application.Resources>
+        <SolidColorBrush x:Key="Ok" Color="#7CD992" />
+        <SolidColorBrush x:Key="Warn" Color="#F2C94C" />
+        <SolidColorBrush x:Key="Hot" Color="#F2994A" />
+        <SolidColorBrush x:Key="Crit" Color="#FF5C5C" />
+        <SolidColorBrush x:Key="Muted" Color="#8A9099" />
+        <SolidColorBrush x:Key="Text" Color="#E8EAED" />
+        <!-- dataviz reference palette, categorical slot 1, dark step -->
+        <SolidColorBrush x:Key="Series" Color="#3987E5" />
+    </Application.Resources>
+</Application>

@@ -1,0 +1,108 @@
+{
+  "PumpGuard": {
+    "PollIntervalMs": 1000,
+    "SensorLostAfterSeconds": 10,
+    "ShutdownCountdownSeconds": 30,
+    "CancelSnoozeSeconds": 300,
+    "DryRun": false,
+    "ApiUrl": "http://127.0.0.1:8765",
+    "ApiToken": "",
+    "Pump": {
+      "SensorId": "",
+      "MinRpm": 500,
+      "FailAfterSeconds": 5,
+      "TreatSensorLossAsFailure": true
+    },
+    "Temperatures": [
+      {
+        "Name": "CPU",
+        "SensorId": "/amdcpu/0/temperature/1",
+        "WarnC": 65,
+        "ShutdownC": 75,
+        "ShutdownHoldSeconds": 5,
+        "CriticalC": 85,
+        "CriticalHoldSeconds": 2,
+        "Group": "CPU",
+        "Label": "Температура"
+      },
+      {
+        "Name": "GPU Hot Spot",
+        "SensorId": "/gpu-nvidia/0/temperature/2",
+        "WarnC": 90,
+        "ShutdownC": 100,
+        "ShutdownHoldSeconds": 5,
+        "CriticalC": 105,
+        "CriticalHoldSeconds": 2,
+        "Group": "GPU",
+        "Label": "Hot Spot"
+      },
+      {
+        "Name": "GPU",
+        "SensorIds": [
+          "/nvml/0/temperature/core",
+          "/gpu-nvidia/0/temperature/0"
+        ],
+        "WarnC": 75,
+        "ShutdownC": 83,
+        "ShutdownHoldSeconds": 5,
+        "CriticalC": 88,
+        "CriticalHoldSeconds": 2,
+        "Group": "GPU",
+        "Label": "Ядро"
+      },
+      {
+        "Name": "GPU Memory",
+        "SensorId": "/nvml/0/temperature/memory",
+        "WarnC": 75,
+        "ShutdownC": 85,
+        "ShutdownHoldSeconds": 5,
+        "CriticalC": 90,
+        "CriticalHoldSeconds": 2,
+        "Group": "GPU",
+        "Label": "Память"
+      }
+    ],
+    "Extras": [
+      {
+        "Name": "Мощность",
+        "SensorId": "/amdcpu/0/power/0",
+        "Unit": "W",
+        "Group": "CPU"
+      },
+      {
+        "Name": "Нагрузка",
+        "SensorId": "/amdcpu/0/load/0",
+        "Unit": "%",
+        "Group": "CPU"
+      },
+      {
+        "Name": "Нагрузка",
+        "SensorId": "/nvml/0/load/core",
+        "Unit": "%",
+        "Group": "GPU"
+      },
+      {
+        "Name": "Мощность",
+        "SensorId": "/nvml/0/power",
+        "Unit": "W",
+        "Group": "GPU",
+        "LimitSensorId": "/nvml/0/power/limit"
+      },
+      {
+        "Name": "VRAM",
+        "SensorId": "/nvml/0/memory/used",
+        "Unit": "GB",
+        "Group": "GPU",
+        "LimitSensorId": "/nvml/0/memory/total"
+      }
+    ]
+  },
+  "FanControl": {
+    "Enabled": false,
+    "ActivePreset": "Balanced",
+    "RampDownPercentPerTick": 3,
+    "MaxOnWarning": true,
+    "Channels": [],
+    "Presets": {}
+  }
+}
