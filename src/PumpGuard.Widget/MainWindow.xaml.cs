@@ -139,7 +139,7 @@ public partial class MainWindow : Window
             {
                 var (temp, power) = MainValues(s, g);
                 gpuTable.Add(card.Note is { } n
-                    ? new Row(g, "нет драйвера", B("Muted"), null, n, sparkW, sparkH)
+                    ? new Row(g, NoDriver(card), B("Muted"), null, InfoTip(card), sparkW, sparkH)
                     : Item(g, GpuSummary(temp, power), WorstDot(s, g), temp is null ? "" : $"temp:{temp.Name}", "°C"));
                 continue;
             }
@@ -150,6 +150,9 @@ public partial class MainWindow : Window
                 rows.Add(Item(t.Label ?? t.Name, t.Value is { } v ? $"{v:0} °C" : "—", LevelDot(t.Level), $"temp:{t.Name}", "°C"));
             foreach (var e in s.Extras.Where(e => e.Group == g))
                 rows.Add(Item(e.Name, FormatExtra(e), Brushes.Transparent, $"extra:{e.Group}/{e.Name}", e.Unit));
+            // What Windows reports for the card (PCIe link, power state): the only data a card without a driver has.
+            foreach (var info in card?.Info ?? [])
+                rows.Add(new Row(info.Label, info.Value, Brushes.Transparent, null, null, sparkW, sparkH));
             blocks.Add((g == "" ? (groups.Count > 1 ? "Прочее" : "") : g, rows));
         }
         if (gpuTable.Count > 0)
@@ -259,7 +262,7 @@ public partial class MainWindow : Window
                 // Many GPUs: one short item per card ("GPU3  54°  250 W"); details are in the other views.
                 var (temp, power) = MainValues(s, g);
                 AddBarBlock(many ? g.Split(" · ")[0] : g.ToUpperInvariant(), card.Note is not null
-                    ? [("", "нет драйвера", B("Muted"))]
+                    ? [("", NoDriver(card), B("Muted"))]
                     : [("", temp?.Value is { } tv ? $"{tv:0}°" : "—", WorstDotOrNull(s, g)), ("", power is null ? "" : $"{power.Value:0} W", null)],
                     null, "°C");
                 continue;
@@ -309,7 +312,10 @@ public partial class MainWindow : Window
         {
             if (GpuCardOf(s, g) is { Note: { } note })
             {
-                AddTile(g, "—", "нет драйвера", B("Muted"), null, "°C", note);
+                // No temperature to show: the power state (D3 = asleep) is the headline instead.
+                var c = GpuCardOf(s, g)!;
+                var state = c.Info.FirstOrDefault(i => i.Label == "Питание")?.Value.Split(' ')[0] ?? "—";
+                AddTile(g, state, "нет драйвера", B("Muted"), null, "°C", InfoTip(c));
                 continue;
             }
             var (temp, power) = MainValues(s, g);
@@ -386,6 +392,13 @@ public partial class MainWindow : Window
             .Distinct().Where(g => !gpu.Contains(g)).ToList();
         return [.. config.Where(g => g != ""), .. gpu, .. config.Where(g => g == "")];
     }
+
+    /// <summary>"нет драйвера · D3": the power state is the one live thing known about a card without a driver.</summary>
+    private static string NoDriver(GpuCard card) =>
+        card.Info.FirstOrDefault(i => i.Label == "Питание")?.Value.Split(' ')[0] is { } d ? $"нет драйвера · {d}" : "нет драйвера";
+
+    private static string InfoTip(GpuCard card) =>
+        string.Join("\n", new[] { card.Note }.Concat(card.Info.Select(i => $"{i.Label}: {i.Value}")).OfType<string>());
 
     private static GpuCard? GpuCardOf(GuardStatus s, string group) => s.Gpus.FirstOrDefault(c => c.Group == group);
 

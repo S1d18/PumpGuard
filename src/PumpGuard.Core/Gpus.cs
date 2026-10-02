@@ -58,7 +58,14 @@ public sealed record GpuDevice(int Number, string Name, int? PciBus, string? Nvm
 }
 
 /// <summary>A card as the status/widget shows it.</summary>
-public sealed record GpuCard(string Group, string Name, int? PciBus, string? Note, int? DriverError = null);
+public sealed record GpuCard(string Group, string Name, int? PciBus, string? Note, int? DriverError = null)
+{
+    /// <summary>What Windows itself reports for the card (PCIe link, power state): there even without a driver.</summary>
+    public IReadOnlyList<GpuInfoLine> Info { get; init; } = [];
+}
+
+/// <summary>A descriptive line under a card: "PCIe" → "3.0 ×16", "Питание" → "D3 — спит".</summary>
+public sealed record GpuInfoLine(string Label, string Value);
 
 public sealed record GpuInventory(IReadOnlyList<GpuDevice> Devices)
 {
