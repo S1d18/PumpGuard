@@ -36,8 +36,18 @@ public sealed record GuardStatus(
 {
     public IReadOnlyList<FanStatus> Fans { get; init; } = [];
 
-    /// <summary>Informational lines that do not change the state, e.g. a GPU running without a driver.</summary>
+    /// <summary>Informational lines that do not change the state.</summary>
     public IReadOnlyList<string> Notices { get; init; } = [];
+
+    /// <summary>Every GPU found, including ones without a driver (they have a Note and no rows).</summary>
+    public IReadOnlyList<GpuCard> Gpus { get; init; } = [];
+
+    /// <summary>Adds warnings found outside the safety rules (e.g. NVLink); they can only raise Normal to Warning.</summary>
+    public GuardStatus WithWarnings(IReadOnlyList<Issue> warnings) => warnings.Count == 0 ? this : this with
+    {
+        Issues = [.. Issues, .. warnings],
+        State = State == GuardState.Normal ? GuardState.Warning : State,
+    };
     public string? FanPreset { get; init; }
     public bool FanControlEnabled { get; init; }
 

@@ -20,6 +20,8 @@ public sealed class MonitorWorker(
     private GuardState _lastState = GuardState.Normal;
     private HashSet<string> _lastIssues = [];
     private DateTimeOffset? _shutdownRetryAt;
+    private readonly NvLinkWatch _nvlink = new();
+    private readonly DateTimeOffset _started = DateTimeOffset.Now;
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -53,8 +55,9 @@ public sealed class MonitorWorker(
                 catch (Exception ex) { log.LogError(ex, "Ошибка чтения датчиков {Source}", source.GetType().Name); }
             }
 
-            if (Simulation.CloneGpus(o) is var clones and > 0) Simulation.CloneReadings(sensors, clones);
-            if (gpus.Refresh(sensors, now)) monitor.SetGpus(gpus.Setup, gpus.Notices);
+            if (Simulation.CloneGpus(o) is var clones and > 0) Simulation.CloneReadings(sensors, clones,
+                linkDownOn: now - _started > TimeSpan.FromSeconds(15) ? o.SimulateNvLinkDown : 0); // links drop mid-run, as they do
+            if (gpus.Refresh(sensors, now)) monitor.SetGpus(gpus.Setup, gpus.Cards);
 
             var readings = new Dictionary<string, double?>();
             foreach (var s in sensors) readings.TryAdd(s.Id, s.Value);
@@ -71,6 +74,7 @@ public sealed class MonitorWorker(
                 status = status.WithFans(fanResult, fans.ControlEnabled);
             }
             catch (Exception ex) { log.LogError(ex, "Ошибка управления вентиляторами"); }
+            status = status.WithWarnings(_nvlink.Check(gpus.Setup, readings));
 
             hub.Publish(status, sensors);
 

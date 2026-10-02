@@ -16,7 +16,7 @@ public sealed class GpuDiscovery(NvmlSensorSource nvml, LhmHardware lhm, IOption
     private string _lastSignature = "";
 
     public GpuSetup Setup { get; private set; } = GpuSetup.Empty;
-    public IReadOnlyList<string> Notices { get; private set; } = [];
+    public IReadOnlyList<GpuCard> Cards { get; private set; } = [];
 
     /// <summary>Returns true when the GPU set (and so the rules) changed.</summary>
     public bool Refresh(IReadOnlyList<SensorReading> sensors, DateTimeOffset now)
@@ -36,13 +36,14 @@ public sealed class GpuDiscovery(NvmlSensorSource nvml, LhmHardware lhm, IOption
         var inventory = GpuInventory.Merge(nvmlDevices, lhmDevices, DriverlessCards(Ignored));
         var setup = GpuSetup.Build(inventory, sensors, o);
 
-        var signature = string.Join("|", setup.Rules.Select(r => r.Name).Concat(setup.Extras.Select(e => e.SensorId)).Concat(inventory.Notices));
+        var signature = string.Join("|", setup.Rules.Select(r => r.Name).Concat(setup.Extras.Select(e => e.SensorId))
+            .Concat(inventory.Cards.Select(c => $"{c.Group}:{c.Note}")));
         if (signature == _lastSignature) return false;
         _lastSignature = signature;
-        (Setup, Notices) = (setup, inventory.Notices);
-        log.LogWarning("Видеокарты: {Gpus}{Notices}",
-            inventory.Devices.Count == 0 ? "не найдены" : string.Join(", ", inventory.Devices.Select(d => $"{d.Group} (PCI {d.PciBus})")),
-            inventory.Notices.Count == 0 ? "" : "; " + string.Join("; ", inventory.Notices));
+        (Setup, Cards) = (setup, inventory.Cards);
+        log.LogWarning("Видеокарты: {Gpus}",
+            inventory.Devices.Count == 0 ? "не найдены"
+                : string.Join(", ", inventory.Devices.Select(d => $"{d.Group} (PCI {d.PciBus}){(d.Note is { } n ? " — " + n : "")}")));
         return true;
     }
 
@@ -77,9 +78,9 @@ public sealed class GpuDiscovery(NvmlSensorSource nvml, LhmHardware lhm, IOption
     }
 
     /// <summary>Video cards Windows lists with a device error (e.g. code 31: no driver loaded).</summary>
-    private List<string> DriverlessCards(Func<string, bool> ignored)
+    private List<DriverlessGpu> DriverlessCards(Func<string, bool> ignored)
     {
-        var notices = new List<string>();
+        var cards = new List<DriverlessGpu>();
         try
         {
             using var searcher = new ManagementObjectSearcher("SELECT Name, PNPDeviceID, ConfigManagerErrorCode FROM Win32_VideoController");
@@ -89,8 +90,9 @@ public sealed class GpuDiscovery(NvmlSensorSource nvml, LhmHardware lhm, IOption
                 {
                     var name = card["Name"] as string ?? "?";
                     var code = Convert.ToInt32(card["ConfigManagerErrorCode"] ?? 0);
-                    if (code != 0 && (card["PNPDeviceID"] as string ?? "").StartsWith("PCI", StringComparison.OrdinalIgnoreCase) && !ignored(name))
-                        notices.Add($"{GpuDevice.ShortName(name)}: работает без драйвера (код {code}), датчиков нет");
+                    var pnp = card["PNPDeviceID"] as string ?? "";
+                    if (code != 0 && pnp.StartsWith("PCI", StringComparison.OrdinalIgnoreCase) && !ignored(name))
+                        cards.Add(new DriverlessGpu(name, BusOf(pnp), code));
                 }
             }
         }
@@ -98,6 +100,6 @@ public sealed class GpuDiscovery(NvmlSensorSource nvml, LhmHardware lhm, IOption
         {
             log.LogDebug(ex, "Список видеокарт Windows недоступен");
         }
-        return notices;
+        return cards;
     }
 }

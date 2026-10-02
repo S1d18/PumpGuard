@@ -25,9 +25,16 @@ public sealed record GpuThresholds(double? GpuMax = null, double? Slowdown = nul
 /// <summary>A GPU as one source sees it: NVML device "/nvml/0", or an LHM hardware node "/gpu-nvidia/0".</summary>
 public sealed record GpuSourceDevice(string Prefix, string Name, int? PciBus, GpuThresholds? Thresholds = null);
 
-/// <summary>One physical card, with the source prefixes that describe it.</summary>
-public sealed record GpuDevice(int Number, string Name, int? PciBus, string? NvmlPrefix, string? LhmPrefix, GpuThresholds Thresholds)
+/// <summary>A card Windows lists with a device error, e.g. code 31: no driver loaded, so no sensors.</summary>
+public sealed record DriverlessGpu(string Name, int? PciBus, int ErrorCode);
+
+/// <summary>One physical card, with the source prefixes that describe it. DriverError: Windows device error code.</summary>
+public sealed record GpuDevice(int Number, string Name, int? PciBus, string? NvmlPrefix, string? LhmPrefix, GpuThresholds Thresholds,
+    int? DriverError = null)
 {
+    /// <summary>Shown under the card's block when it has nothing to measure.</summary>
+    public string? Note => DriverError is { } code ? $"без драйвера (код {code}), датчиков нет" : null;
+
     /// <summary>"GPU · V100" for the first card, "GPU2 · GT 710" for the second, ...</summary>
     public string Group => $"{(Number == 1 ? "GPU" : $"GPU{Number}")} · {ShortName(Name)}";
 
@@ -50,15 +57,23 @@ public sealed record GpuDevice(int Number, string Name, int? PciBus, string? Nvm
     }
 }
 
-public sealed record GpuInventory(IReadOnlyList<GpuDevice> Devices, IReadOnlyList<string> Notices)
+/// <summary>A card as the status/widget shows it.</summary>
+public sealed record GpuCard(string Group, string Name, int? PciBus, string? Note, int? DriverError = null);
+
+public sealed record GpuInventory(IReadOnlyList<GpuDevice> Devices)
 {
-    public static readonly GpuInventory Empty = new([], []);
+    public static readonly GpuInventory Empty = new([]);
+
+    public IReadOnlyList<GpuCard> Cards => Devices.Select(d => new GpuCard(d.Group, d.Name, d.PciBus, d.Note, d.DriverError)).ToList();
 
     /// <summary>
     /// Pairs NVML devices with LHM GPU nodes. Same PCI bus = same card; without bus numbers, cards are paired
-    /// by name in enumeration order. Cards are numbered by PCI bus, so GPU2 stays GPU2 across reboots.
+    /// by name in enumeration order. Working cards are numbered by PCI bus, so GPU2 stays GPU2 across reboots;
+    /// cards without a driver come after them, so adding or removing one never renumbers the cards that are
+    /// measured (fan curves follow /gpu/1/core and must keep pointing at the same card).
     /// </summary>
-    public static GpuInventory Merge(IReadOnlyList<GpuSourceDevice> nvml, IReadOnlyList<GpuSourceDevice> lhm, IReadOnlyList<string> notices)
+    public static GpuInventory Merge(IReadOnlyList<GpuSourceDevice> nvml, IReadOnlyList<GpuSourceDevice> lhm,
+        IReadOnlyList<DriverlessGpu>? driverless = null)
     {
         var unmatchedLhm = lhm.ToList();
         var pairs = new List<(GpuSourceDevice? N, GpuSourceDevice? L)>();
@@ -77,7 +92,10 @@ public sealed record GpuInventory(IReadOnlyList<GpuDevice> Devices, IReadOnlyLis
             .Select((p, i) => new GpuDevice(i + 1, p.N?.Name ?? p.L!.Name, p.Bus, p.N?.Prefix, p.L?.Prefix,
                 p.N?.Thresholds ?? p.L?.Thresholds ?? new GpuThresholds()))
             .ToList();
-        return new GpuInventory(devices, notices);
+        devices.AddRange((driverless ?? [])
+            .OrderBy(d => d.PciBus ?? int.MaxValue)
+            .Select((d, i) => new GpuDevice(devices.Count + i + 1, d.Name, d.PciBus, null, null, new GpuThresholds(), d.ErrorCode)));
+        return new GpuInventory(devices);
     }
 
     private static bool SameModel(string a, string b) => GpuDevice.ShortName(a).Equals(GpuDevice.ShortName(b), StringComparison.OrdinalIgnoreCase);
@@ -100,8 +118,10 @@ public sealed record GpuSetup(
         var rules = new List<TemperatureRule>();
         var extras = new List<ExtraSensor>();
         var aliases = new Dictionary<string, IReadOnlyList<string>>();
+        var nvlinkCards = inventory.Devices.Count(d =>
+            d.NvmlPrefix is { } p && sensors.Any(s => s.Id == $"{p}/nvlink/total" && s.Value > 0));
 
-        foreach (var d in inventory.Devices)
+        foreach (var d in inventory.Devices.Where(d => d.DriverError is null))
         {
             string? Find(string? prefix, SensorKind kind, params string[] names) =>
                 prefix is null ? null : sensors.FirstOrDefault(s =>
@@ -151,9 +171,10 @@ public sealed record GpuSetup(
                 Extra("vram", "VRAM", "GB", Alias("vram-total", Nvml("memory/total")) ? "vram-total" : null);
             if (Alias("fan", Nvml("fan"))) Extra("fan", "Вентилятор", "%");
             else if (Alias("fan", Find(d.LhmPrefix, SensorKind.Fan, "GPU Fan", "GPU Fan 1"))) Extra("fan", "Вентилятор", "RPM");
-            // NVLink only when links are up: an SXM2 card on a PCIe adapter has links that never come up.
+            // NVLink: always on a multi-GPU NVLink box (so a card whose links all failed still shows 0 / 6), but
+            // not for a lone SXM2 card on a PCIe adapter, whose links never come up.
             var nvlinkActive = Nvml("nvlink/active");
-            if (sensors.FirstOrDefault(s => s.Id == nvlinkActive)?.Value > 0
+            if ((sensors.FirstOrDefault(s => s.Id == nvlinkActive)?.Value > 0 || nvlinkCards >= 2)
                 && Alias("nvlink", nvlinkActive) && Alias("nvlink-total", Nvml("nvlink/total")))
                 Extra("nvlink", "NVLink", "", "nvlink-total");
         }
@@ -174,6 +195,31 @@ public sealed record GpuSetup(
                 .Select(id => readings.TryGetValue(id, out var v) ? v : null)
                 .Where(v => v is { } x && double.IsFinite(x))
                 .Max();
+    }
+}
+
+/// <summary>
+/// Warns when a card has fewer active NVLink links than it had before (a link dropped: cable/bridge/board fault).
+/// Remembers the best count seen per card for the life of the service.
+/// </summary>
+public sealed class NvLinkWatch
+{
+    private readonly Dictionary<string, double> _best = new();
+
+    public IReadOnlyList<Issue> Check(GpuSetup setup, IReadOnlyDictionary<string, double?> readings)
+    {
+        var issues = new List<Issue>();
+        foreach (var e in setup.Extras.Where(e => e.Name == "NVLink"))
+        {
+            if (!readings.TryGetValue(e.SensorId, out var v) || v is not { } active) continue;
+            var best = _best[e.SensorId] = Math.Max(_best.GetValueOrDefault(e.SensorId), active);
+            if (active >= best) continue;
+            var total = e.LimitSensorId is { } t && readings.TryGetValue(t, out var tv) ? tv : null;
+            var lost = best - active;
+            issues.Add(new Issue(e.Group, IssueSeverity.Warning,
+                $"{e.Group}: NVLink {active:0}/{total ?? best:0} — {(lost == 1 ? "отключился 1 линк" : $"отключились линки: {lost:0}")}"));
+        }
+        return issues;
     }
 }
 

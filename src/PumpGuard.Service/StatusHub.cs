@@ -56,8 +56,8 @@ public sealed class Simulation
     /// <summary>Pretends the pump reads 0 RPM until this time.</summary>
     public DateTimeOffset PumpFailureUntil { get; set; }
 
-    /// <summary>How many fake copies of the first GPU to add (PumpGuard:SimulateExtraGpus), e.g. to preview a 2×V100 NVLink box.</summary>
-    public static int CloneGpus(PumpGuardOptions o) => o.DryRun ? Math.Clamp(o.SimulateExtraGpus, 0, 3) : 0;
+    /// <summary>How many fake copies of the first GPU to add (PumpGuard:SimulateExtraGpus), e.g. 7 for an 8×V100 NVLink box.</summary>
+    public static int CloneGpus(PumpGuardOptions o) => o.DryRun ? Math.Clamp(o.SimulateExtraGpus, 0, 15) : 0;
 
     /// <summary>Adds copies of the first device of one source ("/nvml/0" → "/nvml/1", ...), on later PCI buses.</summary>
     public static List<GpuSourceDevice> Clone(List<GpuSourceDevice> devices, int copies)
@@ -67,12 +67,15 @@ public sealed class Simulation
         var family = first.Prefix[..first.Prefix.LastIndexOf('/')];
         var result = devices.ToList();
         for (var k = 1; k <= copies; k++)
-            result.Add(first with { Prefix = $"{family}/{devices.Count + k - 1}", PciBus = (first.PciBus ?? 0) + 33 * k });
+            result.Add(first with { Prefix = $"{family}/{devices.Count + k - 1}", PciBus = (first.PciBus ?? 0) + 8 * k });
         return result;
     }
 
-    /// <summary>Copies the first GPU's readings for each clone, a little hotter and busier so the blocks differ.</summary>
-    public static void CloneReadings(List<SensorReading> sensors, int copies)
+    /// <summary>
+    /// Copies the first GPU's readings for each clone, a little hotter and busier so the blocks differ. All cards
+    /// get their NVLink links up, as in an NVLink box; <paramref name="linkDownOn"/> (GPU number) loses one.
+    /// </summary>
+    public static void CloneReadings(List<SensorReading> sensors, int copies, int linkDownOn = 0)
     {
         foreach (var family in new[] { "/nvml", "/gpu-nvidia" })
         {
@@ -85,12 +88,21 @@ public sealed class Simulation
                         Id = $"{family}/{existing + k - 1}/{s.Id[(family.Length + 3)..]}",
                         Value = s.Value is not { } v ? null : s.Kind switch
                         {
-                            SensorKind.Temperature => v + 3 * k,
-                            SensorKind.Load => Math.Min(100, v + 15 * k),
-                            SensorKind.Power when !s.Id.EndsWith("/limit", StringComparison.Ordinal) => v + 25 * k,
+                            SensorKind.Temperature => v + 2 * k,
+                            SensorKind.Load => Math.Min(100, v + 5 * k),
+                            SensorKind.Power when !s.Id.EndsWith("/limit", StringComparison.Ordinal) => Math.Min(300, v + 10 * k),
                             _ => v,
                         },
                     });
+        }
+
+        for (var i = 0; i < sensors.Count; i++)
+        {
+            var s = sensors[i];
+            if (!s.Id.StartsWith("/nvml/", StringComparison.Ordinal) || !s.Id.EndsWith("/nvlink/active", StringComparison.Ordinal)) continue;
+            var total = sensors.FirstOrDefault(t => t.Id == s.Id.Replace("/active", "/total"))?.Value ?? 6;
+            var gpuNumber = int.Parse(s.Id.Split('/')[2]) + 1;
+            sensors[i] = s with { Value = gpuNumber == linkDownOn ? total - 1 : total };
         }
     }
 }

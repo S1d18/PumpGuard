@@ -19,17 +19,17 @@ public sealed class SafetyMonitor
     private bool _shutdownIssued;
     private bool _pumpSeen;
     private GpuSetup _gpus = GpuSetup.Empty;
-    private IReadOnlyList<string> _notices = [];
+    private IReadOnlyList<GpuCard> _cards = [];
 
     public SafetyMonitor(PumpGuardOptions options) => _o = options;
 
     /// <summary>Rules and widget rows generated for the GPUs found at runtime, on top of the config's own.</summary>
-    public void SetGpus(GpuSetup gpus, IReadOnlyList<string> notices)
+    public void SetGpus(GpuSetup gpus, IReadOnlyList<GpuCard> cards)
     {
         lock (_lock)
         {
             _gpus = gpus;
-            _notices = notices;
+            _cards = cards;
         }
     }
 
@@ -89,7 +89,7 @@ public sealed class SafetyMonitor
                 _shutdownAt is { } at ? Math.Max(0, (at - now).TotalSeconds) : null,
                 _snoozedUntil > now ? _snoozedUntil : null,
                 _shutdownReason,
-                _o.DryRun) { Notices = _notices };
+                _o.DryRun) { Gpus = _cards };
             return new GuardEvaluation(status, execute);
         }
     }

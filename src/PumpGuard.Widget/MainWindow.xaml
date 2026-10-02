@@ -10,8 +10,9 @@
         <ItemsPanelTemplate x:Key="StackedGroups">
             <StackPanel Orientation="Vertical" />
         </ItemsPanelTemplate>
+        <!-- Wide view: blocks side by side, wrapping into rows on machines with many GPUs -->
         <ItemsPanelTemplate x:Key="SideBySideGroups">
-            <StackPanel Orientation="Horizontal" />
+            <WrapPanel Orientation="Horizontal" MaxWidth="{Binding Source={x:Static SystemParameters.WorkArea}, Path=Width}" />
         </ItemsPanelTemplate>
     </Window.Resources>
 

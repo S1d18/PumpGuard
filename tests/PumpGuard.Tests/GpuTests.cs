@@ -48,8 +48,7 @@ public class GpuTests
         // Two identical NVLink V100s: LHM lists them in the opposite order to NVML.
         var inv = GpuInventory.Merge(
             [new("/nvml/0", "Tesla V100-SXM2-16GB", 65, V100), new("/nvml/1", "Tesla V100-SXM2-16GB", 98, V100)],
-            [new("/gpu-nvidia/0", "NVIDIA Tesla V100-SXM2-16GB", 98), new("/gpu-nvidia/1", "NVIDIA Tesla V100-SXM2-16GB", 65)],
-            []);
+            [new("/gpu-nvidia/0", "NVIDIA Tesla V100-SXM2-16GB", 98), new("/gpu-nvidia/1", "NVIDIA Tesla V100-SXM2-16GB", 65)]);
 
         Assert.Collection(inv.Devices,
             d => Assert.Equal(("/nvml/0", "/gpu-nvidia/1", 1, "GPU · V100"), (d.NvmlPrefix, d.LhmPrefix, d.Number, d.Group)),
@@ -61,17 +60,79 @@ public class GpuTests
     {
         var inv = GpuInventory.Merge(
             [new("/nvml/0", "Tesla V100-SXM2-16GB", 65, V100)],
-            [new("/gpu-nvidia/0", "NVIDIA Tesla V100-SXM2-16GB", 65), new("/gpu-amd/0", "AMD Radeon RX 6400", 10)],
-            ["GT 710: без драйвера"]);
+            [new("/gpu-nvidia/0", "NVIDIA Tesla V100-SXM2-16GB", 65), new("/gpu-amd/0", "AMD Radeon RX 6400", 10)]);
 
         Assert.Equal(["GPU · RX 6400", "GPU2 · V100"], inv.Devices.Select(d => d.Group));
-        Assert.Single(inv.Notices);
+    }
+
+    [Fact]
+    public void DriverlessCard_GetsItsOwnBlock_AfterWorkingCards_WithoutRenumberingThem()
+    {
+        // GT 710 sits on a lower PCI bus than the V100, but has no driver: the V100 must stay GPU (/gpu/1).
+        var inv = GpuInventory.Merge(
+            [new("/nvml/0", "Tesla V100-SXM2-16GB", 65, V100)], [],
+            [new DriverlessGpu("NVIDIA GeForce GT 710", 10, 31)]);
+
+        Assert.Equal(["GPU · V100", "GPU2 · GT 710"], inv.Cards.Select(c => c.Group));
+        Assert.Equal("без драйвера (код 31), датчиков нет", inv.Cards[1].Note);
+        Assert.Null(inv.Cards[0].Note);
+        var setup = GpuSetup.Build(inv, V100Sensors(0, 0).ToList(), new GpuOptions());
+        Assert.DoesNotContain(setup.Rules, r => r.Group.Contains("GT 710"));
+        Assert.All(setup.Aliases.Keys, k => Assert.StartsWith("/gpu/1/", k));
+    }
+
+    [Theory]
+    [InlineData(4)]
+    [InlineData(8)]
+    public void NvLinkBox_EveryCardGetsBlockAndRules(int cards)
+    {
+        var nvml = Enumerable.Range(0, cards).Select(i => new GpuSourceDevice($"/nvml/{i}", "Tesla V100-SXM2-16GB", 24 + 8 * i, V100)).ToList();
+        var sensors = Enumerable.Range(0, cards).SelectMany(i => V100Sensors(i, i)).Where(s => s.Id.StartsWith("/nvml")).ToList();
+
+        var setup = GpuSetup.Build(GpuInventory.Merge(nvml, []), sensors, new GpuOptions());
+
+        Assert.Equal(cards * 2, setup.Rules.Count);                       // core + memory per card
+        Assert.Equal(cards, setup.Extras.Count(e => e.Name == "NVLink"));
+        Assert.Equal($"GPU{cards} · V100", setup.Rules[^1].Group);
+    }
+
+    [Fact]
+    public void NvLink_StaysVisibleAtZero_InAMultiCardBox()
+    {
+        var nvml = new List<GpuSourceDevice> { new("/nvml/0", "Tesla V100-SXM2-16GB", 24, V100), new("/nvml/1", "Tesla V100-SXM2-16GB", 32, V100) };
+        var sensors = V100Sensors(0, 0).Concat(V100Sensors(1, 1)).Where(s => s.Id.StartsWith("/nvml"))
+            .Select(s => s.Id == "/nvml/1/nvlink/active" ? s with { Value = 0 } : s).ToList();
+
+        var setup = GpuSetup.Build(GpuInventory.Merge(nvml, []), sensors, new GpuOptions());
+
+        Assert.Contains(setup.Extras, e => e.Name == "NVLink" && e.Group == "GPU2 · V100");
+    }
+
+    [Fact]
+    public void NvLinkWatch_WarnsWhenALinkDrops()
+    {
+        var nvml = new List<GpuSourceDevice> { new("/nvml/0", "Tesla V100-SXM2-16GB", 24, V100), new("/nvml/1", "Tesla V100-SXM2-16GB", 32, V100) };
+        var sensors = V100Sensors(0, 0).Concat(V100Sensors(1, 1)).Where(s => s.Id.StartsWith("/nvml")).ToList();
+        var setup = GpuSetup.Build(GpuInventory.Merge(nvml, []), sensors, new GpuOptions());
+        var watch = new NvLinkWatch();
+        Dictionary<string, double?> Readings(double gpu2Links)
+        {
+            var r = sensors.ToDictionary(s => s.Id, s => s.Value);
+            r["/nvml/1/nvlink/active"] = gpu2Links;
+            setup.ApplyAliases(r);
+            return r;
+        }
+
+        Assert.Empty(watch.Check(setup, Readings(6)));
+        var issue = Assert.Single(watch.Check(setup, Readings(5)));
+        Assert.Equal("GPU2 · V100: NVLink 5/6 — отключился 1 линк", issue.Message);
+        Assert.Empty(watch.Check(setup, Readings(6)));
     }
 
     [Fact]
     public void Build_V100_GetsDriverDerivedLimits_AndHotSpot()
     {
-        var inv = GpuInventory.Merge([new("/nvml/0", "Tesla V100-SXM2-16GB", 65, V100)], [new("/gpu-nvidia/0", "NVIDIA Tesla V100-SXM2-16GB", 65)], []);
+        var inv = GpuInventory.Merge([new("/nvml/0", "Tesla V100-SXM2-16GB", 65, V100)], [new("/gpu-nvidia/0", "NVIDIA Tesla V100-SXM2-16GB", 65)]);
 
         var setup = GpuSetup.Build(inv, V100Sensors(0, 0).ToList(), new GpuOptions());
 
@@ -92,8 +153,7 @@ public class GpuTests
     {
         var inv = GpuInventory.Merge(
             [new("/nvml/0", "Tesla V100-SXM2-16GB", 65, V100), new("/nvml/1", "Tesla V100-SXM2-16GB", 98, V100)],
-            [new("/gpu-nvidia/0", "NVIDIA Tesla V100-SXM2-16GB", 98), new("/gpu-nvidia/1", "NVIDIA Tesla V100-SXM2-16GB", 65)],
-            []);
+            [new("/gpu-nvidia/0", "NVIDIA Tesla V100-SXM2-16GB", 98), new("/gpu-nvidia/1", "NVIDIA Tesla V100-SXM2-16GB", 65)]);
         var sensors = V100Sensors(0, 1).Concat(V100Sensors(1, 0)).ToList();
 
         var setup = GpuSetup.Build(inv, sensors, new GpuOptions());
@@ -107,7 +167,7 @@ public class GpuTests
     public void SecondGpuOverheating_ShutsDown_WithItsOwnName()
     {
         var inv = GpuInventory.Merge(
-            [new("/nvml/0", "Tesla V100-SXM2-16GB", 65, V100), new("/nvml/1", "Tesla V100-SXM2-16GB", 98, V100)], [], []);
+            [new("/nvml/0", "Tesla V100-SXM2-16GB", 65, V100), new("/nvml/1", "Tesla V100-SXM2-16GB", 98, V100)], []);
         var sensors = V100Sensors(0, 0).Concat(V100Sensors(1, 1)).Where(s => s.Id.StartsWith("/nvml")).ToList();
         var setup = GpuSetup.Build(inv, sensors, new GpuOptions());
         var monitor = new SafetyMonitor(new PumpGuardOptions { Pump = new PumpOptions { SensorId = "/pump" } });
@@ -131,7 +191,7 @@ public class GpuTests
     [Fact]
     public void NvLink_IsShownOnlyWhileLinksAreUp()
     {
-        var inv = GpuInventory.Merge([new("/nvml/0", "Tesla V100-SXM2-16GB", 65, V100)], [], []);
+        var inv = GpuInventory.Merge([new("/nvml/0", "Tesla V100-SXM2-16GB", 65, V100)], []);
         var sensors = V100Sensors(0, 0).Select(s => s.Id.EndsWith("nvlink/active") ? s with { Value = 0 } : s).ToList();
 
         Assert.DoesNotContain(GpuSetup.Build(inv, sensors, new GpuOptions()).Extras, e => e.Name == "NVLink");
@@ -141,7 +201,7 @@ public class GpuTests
     public void TccCard_WithoutHotSpot_GetsNoHotSpotRule()
     {
         // A Tesla in TCC mode is invisible to NVAPI, so LHM reports nothing for it: no rule, no permanent "no data".
-        var inv = GpuInventory.Merge([new("/nvml/0", "Tesla V100-SXM2-16GB", 65, V100)], [], []);
+        var inv = GpuInventory.Merge([new("/nvml/0", "Tesla V100-SXM2-16GB", 65, V100)], []);
         var setup = GpuSetup.Build(inv, V100Sensors(0, 0).Where(s => s.Id.StartsWith("/nvml")).ToList(), new GpuOptions());
 
         Assert.Equal(["Ядро", "Память"], setup.Rules.Select(r => r.Label));

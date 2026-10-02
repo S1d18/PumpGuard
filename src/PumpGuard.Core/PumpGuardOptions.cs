@@ -19,6 +19,9 @@ public sealed class PumpGuardOptions
     /// <summary>DryRun only: add this many fake copies of the first GPU to preview a multi-GPU layout.</summary>
     public int SimulateExtraGpus { get; set; }
 
+    /// <summary>DryRun + SimulateExtraGpus only: this GPU number (1-based) loses one NVLink link.</summary>
+    public int SimulateNvLinkDown { get; set; }
+
     public string ApiUrl { get; set; } = "http://127.0.0.1:8765";
 
     /// <summary>If set, POST endpoints require this value in the X-PumpGuard-Token header.</summary>

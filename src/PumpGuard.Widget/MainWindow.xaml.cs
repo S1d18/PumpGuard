@@ -127,17 +127,34 @@ public partial class MainWindow : Window
         }
 
         var blocks = new List<(string Title, List<Row> Rows)>();
-        // Blocks in config order (CPU, GPU, ...); each block lists its temperatures, then its other values.
+        // Blocks in config order (CPU, ...), then one per GPU; each lists its temperatures, then its other values.
+        // With 3+ GPUs the normal view folds them into one "Видеокарты" table (the wide view keeps details).
         var groups = BlockNames(s);
+        var foldGpus = view != ViewMode.Wide && ManyGpus(s);
+        var gpuTable = new List<Row>();
         foreach (var g in groups)
         {
+            var card = GpuCardOf(s, g);
+            if (foldGpus && card is not null)
+            {
+                var (temp, power) = MainValues(s, g);
+                gpuTable.Add(card.Note is { } n
+                    ? new Row(g, "нет драйвера", B("Muted"), null, n, sparkW, sparkH)
+                    : Item(g, GpuSummary(temp, power), WorstDot(s, g), temp is null ? "" : $"temp:{temp.Name}", "°C"));
+                continue;
+            }
             var rows = new List<Row>();
+            if (card?.Note is { } note)
+                rows.Add(new Row("драйвер не загружен", card.DriverError is { } code ? $"код {code}" : "", B("Muted"), null, note, sparkW, sparkH));
             foreach (var t in s.Temperatures.Where(t => t.Group == g))
                 rows.Add(Item(t.Label ?? t.Name, t.Value is { } v ? $"{v:0} °C" : "—", LevelDot(t.Level), $"temp:{t.Name}", "°C"));
             foreach (var e in s.Extras.Where(e => e.Group == g))
                 rows.Add(Item(e.Name, FormatExtra(e), Brushes.Transparent, $"extra:{e.Group}/{e.Name}", e.Unit));
             blocks.Add((g == "" ? (groups.Count > 1 ? "Прочее" : "") : g, rows));
         }
+        if (gpuTable.Count > 0)
+            blocks.Insert(blocks.FindIndex(b => b.Title != "Прочее") is var i and >= 0 ? Math.Min(i + 1, blocks.Count) : 0,
+                ($"Видеокарты · {s.Gpus.Count(c => c.Note is null)}", gpuTable));
         if (s.Fans.Count > 0)
         {
             var rows = new List<Row>();
@@ -160,8 +177,11 @@ public partial class MainWindow : Window
         RenderNarrow(s, stateBrush, stateText);
 
         // Warnings first, then informational notices (they never change the state, e.g. a GPU without a driver).
-        var notes = s.Issues.Where(i => i.Severity == IssueSeverity.Warning).Select(i => "• " + i.Message).Take(4)
-            .Concat(s.Notices.Select(n => "ⓘ " + n)).ToList();
+        var warnings = s.Issues.Where(i => i.Severity == IssueSeverity.Warning).Select(i => "• " + i.Message).ToList();
+        var notes = warnings.Take(5).ToList();
+        if (warnings.Count > 5) notes.Add($"…и ещё {warnings.Count - 5} (наведите на состояние)");
+        notes.AddRange(s.Notices.Select(n => "ⓘ " + n));
+        StateText.ToolTip = warnings.Count > 0 ? string.Join("\n", warnings) : null;
         Footer.Text = string.Join("\n", notes);
         Footer.Visibility = notes.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
@@ -173,14 +193,28 @@ public partial class MainWindow : Window
         CompactDot.ToolTip = stateText;
         CompactItems.Children.Clear();
         AddSegment("Помпа", s.Pump.Rpm is { } rpm ? $"{rpm:0}" : "—", s.Pump.Ok ? null : B("Crit"));
+        var many = ManyGpus(s);
         foreach (var g in BlockNames(s).Where(g => g != ""))
         {
+            if (many && GpuCardOf(s, g) is not null) continue; // summarised below
             var temp = s.Temperatures.FirstOrDefault(t => t.Group == g);
             var power = s.Extras.FirstOrDefault(e => e.Group == g && e.Unit == "W");
             var parts = new List<string>();
             if (temp is not null) parts.Add(temp.Value is { } v ? $"{v:0} °C" : "—");
             if (power is not null) parts.Add(FormatExtra(power));
             if (parts.Count > 0) AddSegment(g, string.Join(" · ", parts), temp is null ? null : NullIfClear(LevelDot(temp.Level)));
+        }
+        if (many)
+        {
+            // "GPU ×8 · 64 °C · 1980 W": hottest main temperature and total power; per-card lines in the tooltip.
+            var working = s.Gpus.Where(c => c.Note is null).ToList();
+            var mains = working.Select(c => (Card: c, Values: MainValues(s, c.Group))).ToList();
+            var hottest = mains.Select(m => m.Values.Temp?.Value).Max();
+            var power = mains.Select(m => m.Values.Power?.Value).Where(v => v is not null).Sum();
+            var worst = working.Select(c => WorstDot(s, c.Group)).FirstOrDefault(b => b != Brushes.Transparent);
+            AddSegment($"GPU ×{working.Count}", $"{(hottest is { } h ? $"{h:0} °C" : "—")} · {power:0} W", worst,
+                mains.Select(m => $"{m.Card.Group}: {GpuSummary(m.Values.Temp, m.Values.Power)}")
+                    .Concat(s.Gpus.Where(c => c.Note is not null).Select(c => $"{c.Group}: {c.Note}")));
         }
         var warnings = s.Issues.Count(i => i.Severity == IssueSeverity.Warning);
         if (warnings > 0)
@@ -202,6 +236,8 @@ public partial class MainWindow : Window
         CompactItems.Children.Add(panel);
     }
 
+    private double _barGap = 12;
+
     private static Brush? NullIfClear(Brush b) => b == Brushes.Transparent ? null : b;
 
     /// <summary>The full-width bar: pump, every value of each block with the block's sparkline, then fans.</summary>
@@ -210,10 +246,24 @@ public partial class MainWindow : Window
         BarDot.Fill = stateBrush;
         BarState.Text = s.DryRun ? $"{stateText} · тест" : stateText;
         BarItems.Children.Clear();
+        _barGap = ManyGpus(s) ? 6 : 12; // a tighter rhythm leaves room for 8+ GPUs on a 1920 px bar
 
         AddBarBlock("ПОМПА", [("", s.Pump.Rpm is { } rpm ? $"{rpm:0} об/мин" : "—", s.Pump.Ok ? null : B("Crit"))], "pump", "RPM");
+        var many = ManyGpus(s);
         foreach (var g in BlockNames(s))
         {
+            if (GpuCardOf(s, g) is { } card && (many || card.Note is not null))
+            {
+                // On a crowded bar a card without a driver is left out: it is in the state tooltip and other views.
+                if (many && card.Note is not null) continue;
+                // Many GPUs: one short item per card ("GPU3  54°  250 W"); details are in the other views.
+                var (temp, power) = MainValues(s, g);
+                AddBarBlock(many ? g.Split(" · ")[0] : g.ToUpperInvariant(), card.Note is not null
+                    ? [("", "нет драйвера", B("Muted"))]
+                    : [("", temp?.Value is { } tv ? $"{tv:0}°" : "—", WorstDotOrNull(s, g)), ("", power is null ? "" : $"{power.Value:0} W", null)],
+                    null, "°C");
+                continue;
+            }
             var items = new List<(string, string, Brush?)>();
             foreach (var t in s.Temperatures.Where(t => t.Group == g))
                 items.Add((t.Label ?? t.Name, t.Value is { } v ? $"{v:0}°" : "—", NullIfClear(LevelDot(t.Level))));
@@ -223,7 +273,13 @@ public partial class MainWindow : Window
             AddBarBlock(g == "" ? "ПРОЧЕЕ" : g.ToUpperInvariant(), items,
                 first is null ? null : $"temp:{first.Name}", "°C");
         }
-        if (s.Fans.Count > 0)
+        if (s.Fans.Count > 0 && many)
+        {
+            // Many GPUs leave no room for every fan: the slowest one says the most (a stalled fan shows here).
+            var slowest = s.Fans.Where(f => f.Rpm is not null).MinBy(f => f.Rpm);
+            AddBarBlock("ВЕНТ.", [("мин", slowest is null ? "—" : $"{slowest.Rpm:0} об/мин", s.Fans.Any(f => f.Mode == "Max") ? B("Hot") : null)], null, "RPM");
+        }
+        else if (s.Fans.Count > 0)
             AddBarBlock(s.FanControlEnabled ? $"ВЕНТ. · {s.FanPreset}" : "ВЕНТ.",
                 s.Fans.Select(f => (f.Name, f.Rpm is { } r ? $"{r:0}" : "—", f.Mode == "Max" ? B("Hot") : (Brush?)null)).ToList(),
                 null, "RPM");
@@ -247,13 +303,19 @@ public partial class MainWindow : Window
         NarrowItems.Children.Clear();
 
         AddTile("ПОМПА", s.Pump.Rpm is { } rpm ? $"{rpm:0}" : "—", "об/мин", s.Pump.Ok ? null : B("Crit"), "pump", "RPM");
+        // More than 4 working GPUs: tiles without sparklines, so 8 cards still fit on one screen height.
+        var sparks = s.Gpus.Count(c => c.Note is null) <= 4;
         foreach (var g in BlockNames(s).Where(g => g != ""))
         {
-            var temp = s.Temperatures.FirstOrDefault(t => t.Group == g);
-            var power = s.Extras.FirstOrDefault(e => e.Group == g && e.Unit == "W");
+            if (GpuCardOf(s, g) is { Note: { } note })
+            {
+                AddTile(g, "—", "нет драйвера", B("Muted"), null, "°C", note);
+                continue;
+            }
+            var (temp, power) = MainValues(s, g);
             AddTile(g, temp?.Value is { } v ? $"{v:0}°" : "—",
                 power is null ? "" : FormatExtra(power),
-                temp is null ? null : NullIfClear(LevelDot(temp.Level)), temp is null ? null : $"temp:{temp.Name}", "°C");
+                WorstDotOrNull(s, g), temp is null || (!sparks && GpuCardOf(s, g) is not null) ? null : $"temp:{temp.Name}", "°C");
         }
         if (s.Fans.Count > 0)
         {
@@ -270,9 +332,9 @@ public partial class MainWindow : Window
         }
     }
 
-    private void AddTile(string title, string value, string sub, Brush? dot, string? sparkKey, string unit)
+    private void AddTile(string title, string value, string sub, Brush? dot, string? sparkKey, string unit, string? tip = null)
     {
-        var tile = new StackPanel { Margin = new Thickness(0, 0, 0, 12) };
+        var tile = new StackPanel { Margin = new Thickness(0, 0, 0, 12), ToolTip = tip };
         tile.Children.Add(new TextBlock { Text = title.ToUpperInvariant(), Foreground = B("Muted"), FontSize = 10, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis });
         var main = new StackPanel { Orientation = Orientation.Horizontal };
         main.Children.Add(new TextBlock { Text = value, Foreground = B("Text"), FontSize = 22, FontWeight = FontWeights.Light });
@@ -282,8 +344,8 @@ public partial class MainWindow : Window
         if (sub != "") tile.Children.Add(new TextBlock { Text = sub, Foreground = B("Text"), FontSize = 12, FontWeight = FontWeights.SemiBold });
         if (sparkKey is not null)
         {
-            var (points, tip) = Spark(sparkKey, unit, 80, 18);
-            var host = new Border { Width = 80, Height = 18, Background = Brushes.Transparent, ToolTip = tip, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 3, 0, 0) };
+            var (points, sparkTip) = Spark(sparkKey, unit, 80, 18);
+            var host = new Border { Width = 80, Height = 18, Background = Brushes.Transparent, ToolTip = sparkTip, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 3, 0, 0) };
             host.Child = new System.Windows.Shapes.Polyline { Points = points ?? new PointCollection(), Stroke = B("Series"), StrokeThickness = 1.5, StrokeLineJoin = PenLineJoin.Round };
             tile.Children.Add(host);
         }
@@ -293,7 +355,7 @@ public partial class MainWindow : Window
     private void AddBarBlock(string title, IReadOnlyList<(string Label, string Value, Brush? Dot)> items, string? sparkKey, string unit)
     {
         // Every block, the first one included, is separated from what precedes it (the title).
-        BarItems.Children.Add(new Border { Width = 1, Height = 16, Background = B("Muted"), Opacity = 0.35, Margin = new Thickness(12, 0, 12, 0) });
+        BarItems.Children.Add(new Border { Width = 1, Height = 16, Background = B("Muted"), Opacity = 0.35, Margin = new Thickness(_barGap, 0, _barGap, 0) });
         var block = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         block.Children.Add(new TextBlock { Text = title, Foreground = B("Muted"), FontSize = 10, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center });
         foreach (var (label, value, dot) in items)
@@ -315,9 +377,38 @@ public partial class MainWindow : Window
         BarItems.Children.Add(block);
     }
 
-    private static List<string> BlockNames(GuardStatus s) =>
-        s.Temperatures.Select(t => t.Group).Concat(s.Extras.Select(e => e.Group))
-            .Distinct().OrderBy(g => g == "" ? 1 : 0).ToList();
+    /// <summary>Config blocks first (CPU, ...), then one per GPU card in card order (cards without a driver
+    /// included), and the unnamed "other" block last.</summary>
+    private static List<string> BlockNames(GuardStatus s)
+    {
+        var gpu = s.Gpus.Select(c => c.Group).ToList();
+        var config = s.Temperatures.Select(t => t.Group).Concat(s.Extras.Select(e => e.Group))
+            .Distinct().Where(g => !gpu.Contains(g)).ToList();
+        return [.. config.Where(g => g != ""), .. gpu, .. config.Where(g => g == "")];
+    }
+
+    private static GpuCard? GpuCardOf(GuardStatus s, string group) => s.Gpus.FirstOrDefault(c => c.Group == group);
+
+    /// <summary>3+ working GPUs: the compact views summarise them instead of listing every value.</summary>
+    private static bool ManyGpus(GuardStatus s) => s.Gpus.Count(c => c.Note is null) > 2;
+
+    /// <summary>A block's headline numbers: its first temperature (Hot Spot, else core) and its power reading.</summary>
+    private static (TemperatureStatus? Temp, ExtraValue? Power) MainValues(GuardStatus s, string group) =>
+        (s.Temperatures.FirstOrDefault(t => t.Group == group), s.Extras.FirstOrDefault(e => e.Group == group && e.Unit == "W"));
+
+    private static string GpuSummary(TemperatureStatus? temp, ExtraValue? power) =>
+        $"{(temp?.Value is { } t ? $"{t:0} °C" : "—")}{(power?.Value is { } p ? $" · {p:0} W" : "")}";
+
+    /// <summary>The most serious temperature level in a block, as a status dot (transparent when all is fine).</summary>
+    private Brush WorstDot(GuardStatus s, string group)
+    {
+        var levels = s.Temperatures.Where(t => t.Group == group).Select(t => t.Level).ToList();
+        foreach (var level in new[] { "critical", "shutdown", "warn", "unknown" })
+            if (levels.Contains(level)) return LevelDot(level);
+        return s.Issues.Any(i => i.Source == group) ? B("Warn") : Brushes.Transparent;
+    }
+
+    private Brush? WorstDotOrNull(GuardStatus s, string group) => NullIfClear(WorstDot(s, group));
 
     /// <summary>During an alarm the strip expands, so the countdown and the cancel button are visible.</summary>
     private ViewMode EffectiveView => _inAlarm && _settings.View == ViewMode.Compact ? ViewMode.Normal : _settings.View;
