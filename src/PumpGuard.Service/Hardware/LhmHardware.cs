@@ -38,6 +38,13 @@ public sealed class LhmHardware : ISensorSource, IFanControl, IDisposable
         return result;
     }
 
+    /// <summary>GPU nodes LHM found: id prefix ("/gpu-nvidia/0"), name and Windows device path (for the PCI bus).</summary>
+    public IReadOnlyList<(string Prefix, string Name, string? DevicePath)> Gpus =>
+        _computer?.Hardware
+            .Where(h => h.HardwareType is HardwareType.GpuNvidia or HardwareType.GpuAmd or HardwareType.GpuIntel)
+            .Select(h => (h.Identifier.ToString(), h.Name, (h as LibreHardwareMonitor.Hardware.Gpu.GenericGpu)?.DeviceId))
+            .ToList() ?? [];
+
     public void Apply(IReadOnlyList<FanDecision> decisions)
     {
         foreach (var d in decisions)

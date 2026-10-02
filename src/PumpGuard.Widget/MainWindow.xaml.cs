@@ -159,7 +159,9 @@ public partial class MainWindow : Window
         RenderBar(s, stateBrush, stateText);
         RenderNarrow(s, stateBrush, stateText);
 
-        var notes = s.Issues.Where(i => i.Severity == IssueSeverity.Warning).Select(i => "• " + i.Message).Take(4).ToList();
+        // Warnings first, then informational notices (they never change the state, e.g. a GPU without a driver).
+        var notes = s.Issues.Where(i => i.Severity == IssueSeverity.Warning).Select(i => "• " + i.Message).Take(4)
+            .Concat(s.Notices.Select(n => "ⓘ " + n)).ToList();
         Footer.Text = string.Join("\n", notes);
         Footer.Visibility = notes.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
@@ -230,9 +232,9 @@ public partial class MainWindow : Window
         if (warnings.Count > 0)
         {
             BarState.Text = $"⚠ {warnings.Count} · " + BarState.Text;
-            BarState.ToolTip = string.Join("\n", warnings);
+            BarState.ToolTip = string.Join("\n", warnings.Concat(s.Notices));
         }
-        else BarState.ToolTip = null;
+        else BarState.ToolTip = s.Notices.Count > 0 ? string.Join("\n", s.Notices) : null;
     }
 
     /// <summary>Narrow side column: a tile per block with its main temperature, power and sparkline.</summary>
@@ -241,7 +243,7 @@ public partial class MainWindow : Window
         NarrowDot.Fill = stateBrush;
         var warnings = s.Issues.Where(i => i.Severity == IssueSeverity.Warning).Select(i => i.Message).ToList();
         NarrowState.Text = warnings.Count > 0 ? $"{stateText}\n⚠ {warnings.Count} предупр." : stateText;
-        NarrowState.ToolTip = warnings.Count > 0 ? string.Join("\n", warnings) : null;
+        NarrowState.ToolTip = warnings.Count + s.Notices.Count > 0 ? string.Join("\n", warnings.Concat(s.Notices)) : null;
         NarrowItems.Children.Clear();
 
         AddTile("ПОМПА", s.Pump.Rpm is { } rpm ? $"{rpm:0}" : "—", "об/мин", s.Pump.Ok ? null : B("Crit"), "pump", "RPM");
@@ -249,7 +251,7 @@ public partial class MainWindow : Window
         {
             var temp = s.Temperatures.FirstOrDefault(t => t.Group == g);
             var power = s.Extras.FirstOrDefault(e => e.Group == g && e.Unit == "W");
-            AddTile(temp?.Label is { } l ? $"{g} · {l}" : g, temp?.Value is { } v ? $"{v:0}°" : "—",
+            AddTile(g, temp?.Value is { } v ? $"{v:0}°" : "—",
                 power is null ? "" : FormatExtra(power),
                 temp is null ? null : NullIfClear(LevelDot(temp.Level)), temp is null ? null : $"temp:{temp.Name}", "°C");
         }

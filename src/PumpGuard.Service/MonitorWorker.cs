@@ -9,6 +9,7 @@ public sealed class MonitorWorker(
     IEnumerable<ISensorSource> sources,
     IFanControl fanControl,
     SafetyMonitor monitor,
+    GpuDiscovery gpus,
     FanController fans,
     StatusHub hub,
     Simulation simulation,
@@ -18,6 +19,7 @@ public sealed class MonitorWorker(
 {
     private GuardState _lastState = GuardState.Normal;
     private HashSet<string> _lastIssues = [];
+    private DateTimeOffset? _shutdownRetryAt;
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -51,8 +53,12 @@ public sealed class MonitorWorker(
                 catch (Exception ex) { log.LogError(ex, "Ошибка чтения датчиков {Source}", source.GetType().Name); }
             }
 
+            if (Simulation.CloneGpus(o) is var clones and > 0) Simulation.CloneReadings(sensors, clones);
+            if (gpus.Refresh(sensors, now)) monitor.SetGpus(gpus.Setup, gpus.Notices);
+
             var readings = new Dictionary<string, double?>();
             foreach (var s in sensors) readings.TryAdd(s.Id, s.Value);
+            gpus.Setup.ApplyAliases(readings);
             if (o.DryRun && simulation.PumpFailureUntil > now && o.Pump.SensorId is { } pumpId)
                 readings[pumpId] = 0;
 
@@ -68,8 +74,12 @@ public sealed class MonitorWorker(
 
             hub.Publish(status, sensors);
 
-            if (eval.ExecuteShutdown)
-                shutdown.Shutdown(status.ShutdownReason ?? "перегрев");
+            // A shutdown that did not go through (shutdown.exe failed to start or returned an error) is retried.
+            if (eval.ExecuteShutdown || (status.State == GuardState.ShuttingDown && _shutdownRetryAt <= now))
+            {
+                var ok = shutdown.Shutdown(status.ShutdownReason ?? "перегрев");
+                _shutdownRetryAt = ok ? null : now.AddSeconds(30);
+            }
 
             LogChanges(status);
         }

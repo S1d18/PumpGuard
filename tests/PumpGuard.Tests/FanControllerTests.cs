@@ -161,6 +161,31 @@ public class FanControllerTests
     }
 
     [Fact]
+    public void PresetStorage_IsBounded()
+    {
+        var c = new FanController(Options());
+        var curve = new FanPreset { Curve = [new(40, 30)] };
+
+        Assert.NotNull(c.SavePreset(new string('x', FanController.MaxPresetNameLength + 1), curve));
+        Assert.NotNull(c.SavePreset("Long", new FanPreset { Curve = Enumerable.Range(0, FanController.MaxCurvePoints + 1).Select(i => new CurvePoint(i, 50)).ToList() }));
+        for (var i = 0; i < FanController.MaxUserPresets; i++) Assert.Null(c.SavePreset($"P{i}", curve));
+        Assert.NotNull(c.SavePreset("OneTooMany", curve));
+        Assert.Null(c.SavePreset("P0", curve)); // replacing an existing one is still fine
+    }
+
+    [Fact]
+    public void ImportSettings_SkipsInvalidPresets()
+    {
+        var settings = new FanSettings { Presets = { ["ok"] = new FanPreset { Curve = [new(40, 30)] }, ["bad"] = new FanPreset { Curve = [new(40, 500)] } } };
+        var c = new FanController(Options());
+
+        c.ImportSettings(settings);
+
+        Assert.True(c.Presets.ContainsKey("ok"));
+        Assert.False(c.Presets.ContainsKey("bad"));
+    }
+
+    [Fact]
     public void InvalidPreset_IsRejected() =>
         Assert.NotNull(new FanController(Options()).SavePreset("Bad", new FanPreset { Curve = [new(40, 150)] }));
 

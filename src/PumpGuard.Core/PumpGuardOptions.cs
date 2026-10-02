@@ -16,12 +16,17 @@ public sealed class PumpGuardOptions
     /// <summary>Log instead of shutting down; also enables the simulation endpoint.</summary>
     public bool DryRun { get; set; }
 
+    /// <summary>DryRun only: add this many fake copies of the first GPU to preview a multi-GPU layout.</summary>
+    public int SimulateExtraGpus { get; set; }
+
     public string ApiUrl { get; set; } = "http://127.0.0.1:8765";
 
     /// <summary>If set, POST endpoints require this value in the X-PumpGuard-Token header.</summary>
     public string? ApiToken { get; set; }
 
     public PumpOptions Pump { get; set; } = new();
+
+    public GpuOptions Gpus { get; set; } = new();
 
     public List<TemperatureRule> Temperatures { get; set; } = [];
 

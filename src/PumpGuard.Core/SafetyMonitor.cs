@@ -17,8 +17,21 @@ public sealed class SafetyMonitor
     private DateTimeOffset? _snoozedUntil;
     private string? _shutdownReason;
     private bool _shutdownIssued;
+    private bool _pumpSeen;
+    private GpuSetup _gpus = GpuSetup.Empty;
+    private IReadOnlyList<string> _notices = [];
 
     public SafetyMonitor(PumpGuardOptions options) => _o = options;
+
+    /// <summary>Rules and widget rows generated for the GPUs found at runtime, on top of the config's own.</summary>
+    public void SetGpus(GpuSetup gpus, IReadOnlyList<string> notices)
+    {
+        lock (_lock)
+        {
+            _gpus = gpus;
+            _notices = notices;
+        }
+    }
 
     public GuardEvaluation Evaluate(IReadOnlyDictionary<string, double?> readings, DateTimeOffset now)
     {
@@ -26,11 +39,11 @@ public sealed class SafetyMonitor
         {
             var issues = new List<Issue>();
             var pump = EvaluatePump(readings, now, issues);
-            var temps = _o.Temperatures
+            var temps = _o.Temperatures.Concat(_gpus.Rules)
                 .Where(r => r.AllSensorIds().Count > 0)
-                .Select((r, i) => EvaluateTemperature(r, i, readings, now, issues))
+                .Select(r => EvaluateTemperature(r, readings, now, issues))
                 .ToList();
-            var extras = _o.Extras
+            var extras = _o.Extras.Concat(_gpus.Extras)
                 .Select(e => new ExtraValue(e.Name, Finite(Get(readings, e.SensorId)), e.Unit, e.Group,
                     e.LimitSensorId is { } limitId ? Finite(Get(readings, limitId)) : null))
                 .ToList();
@@ -76,7 +89,7 @@ public sealed class SafetyMonitor
                 _shutdownAt is { } at ? Math.Max(0, (at - now).TotalSeconds) : null,
                 _snoozedUntil > now ? _snoozedUntil : null,
                 _shutdownReason,
-                _o.DryRun);
+                _o.DryRun) { Notices = _notices };
             return new GuardEvaluation(status, execute);
         }
     }
@@ -108,13 +121,19 @@ public sealed class SafetyMonitor
         {
             Held("pump:low", false, now, 0);
             var lost = Held("pump:lost", true, now, _o.SensorLostAfterSeconds);
-            if (lost)
+            // A sensor that never answered since start-up is a setup problem (wrong id, no PawnIO driver), not a
+            // stopped pump: alarming on it would power the PC off ~40 s after every boot.
+            if (lost && !_pumpSeen)
+                issues.Add(new Issue("pump", IssueSeverity.Warning,
+                    $"Датчик помпы {p.SensorId} не отвечает с момента запуска — проверьте Pump:SensorId (--list-sensors)"));
+            else if (lost)
                 issues.Add(new Issue("pump",
                     p.TreatSensorLossAsFailure ? IssueSeverity.Alarm : IssueSeverity.Warning,
                     $"Нет данных с датчика помпы дольше {_o.SensorLostAfterSeconds} с"));
             return new PumpStatus(p.SensorId, null, p.MinRpm, false);
         }
 
+        _pumpSeen = true;
         Held("pump:lost", false, now, 0);
         var low = rpm < p.MinRpm;
         if (low)
@@ -131,10 +150,12 @@ public sealed class SafetyMonitor
         return new PumpStatus(p.SensorId, rpm, p.MinRpm, !low);
     }
 
-    private TemperatureStatus EvaluateTemperature(TemperatureRule r, int index, IReadOnlyDictionary<string, double?> readings,
+    private TemperatureStatus EvaluateTemperature(TemperatureRule r, IReadOnlyDictionary<string, double?> readings,
         DateTimeOffset now, List<Issue> issues)
     {
-        var key = $"t{index}:{r.Name}";
+        // Keyed by block + name: generated GPU rules can be rebuilt without resetting timers, and a hand-written
+        // rule that happens to share a name with a generated one still gets its own timers.
+        var key = $"t:{r.Group}:{r.Name}";
         // The hottest valid reading wins: a sensor that under-reports must not hide an overheat.
         var (hottestId, t) = r.AllSensorIds()
             .Select(id => (Id: id, Value: IsValidTemp(Get(readings, id)) ? Get(readings, id) : null))

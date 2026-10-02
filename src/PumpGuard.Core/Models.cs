@@ -35,6 +35,9 @@ public sealed record GuardStatus(
     bool DryRun)
 {
     public IReadOnlyList<FanStatus> Fans { get; init; } = [];
+
+    /// <summary>Informational lines that do not change the state, e.g. a GPU running without a driver.</summary>
+    public IReadOnlyList<string> Notices { get; init; } = [];
     public string? FanPreset { get; init; }
     public bool FanControlEnabled { get; init; }
 

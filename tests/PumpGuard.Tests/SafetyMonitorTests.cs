@@ -164,9 +164,21 @@ public class SafetyMonitorTests
     {
         var m = new SafetyMonitor(Options());
         var missing = new Dictionary<string, double?> { [Gpu] = 40 };
+        m.Evaluate(R(), T0);
 
-        Assert.Equal(GuardState.Normal, Run(m, missing, 0, 9).Status.State);
-        Assert.Equal(GuardState.Alarm, m.Evaluate(missing, T0.AddSeconds(10)).Status.State);
+        Assert.Equal(GuardState.Normal, Run(m, missing, 1, 10).Status.State);
+        Assert.Equal(GuardState.Alarm, m.Evaluate(missing, T0.AddSeconds(11)).Status.State);
+    }
+
+    [Fact]
+    public void PumpSensorThatNeverAnswered_IsOnlyAWarning_NeverAShutdown()
+    {
+        // Regression (audit): a typo in Pump:SensorId or a missing PawnIO driver must not power off every boot.
+        var log = new List<GuardEvaluation>();
+        Run(new SafetyMonitor(Options()), new Dictionary<string, double?> { [Gpu] = 40 }, 0, 120, log);
+
+        Assert.DoesNotContain(log, e => e.ExecuteShutdown || e.Status.State is GuardState.Alarm or GuardState.ShuttingDown);
+        Assert.Contains(log[^1].Status.Issues, i => i.Message.Contains("не отвечает с момента запуска"));
     }
 
     [Fact]

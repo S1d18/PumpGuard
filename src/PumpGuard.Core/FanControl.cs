@@ -166,16 +166,33 @@ public sealed class FanController
         return true;
     }
 
+    /// <summary>Limits on what the API can store: the service runs as SYSTEM, any local process can call it.</summary>
+    public const int MaxUserPresets = 32, MaxCurvePoints = 16, MaxPresetNameLength = 64;
+
     /// <summary>Adds or replaces a user preset. Returns an error message, or null on success.</summary>
     public string? SavePreset(string name, FanPreset preset)
     {
+        if (Validate(name, preset) is { } error) return error;
+        lock (_lock)
+        {
+            if (!_userPresets.ContainsKey(name) && _userPresets.Count >= MaxUserPresets)
+                return $"Не больше {MaxUserPresets} своих пресетов";
+            _userPresets[name] = preset;
+        }
+        SettingsChanged?.Invoke();
+        return null;
+    }
+
+    private static string? Validate(string name, FanPreset preset)
+    {
         if (string.IsNullOrWhiteSpace(name)) return "Пустое имя пресета";
+        if (name.Length > MaxPresetNameLength) return $"Имя пресета длиннее {MaxPresetNameLength} символов";
+        if (preset.Curve is null) return "Нет кривой";
         if (preset.Mode == FanPresetMode.Curve && preset.Curve.Count == 0) return "Кривая должна содержать хотя бы одну точку";
-        if (preset.Curve.Any(p => p.Percent is < 0 or > 100 || p.TempC is < 0 or > MaxValidTemp))
+        if (preset.Curve.Count > MaxCurvePoints) return $"Не больше {MaxCurvePoints} точек кривой";
+        if (preset.Curve.Any(p => p is null || p.Percent is < 0 or > 100 || p.TempC is < 0 or > MaxValidTemp))
             return "Точки кривой: температура 0–150 °C, скорость 0–100 %";
         if (preset.FixedPercent is < 0 or > 100) return "FixedPercent должен быть в диапазоне 0–100";
-        lock (_lock) _userPresets[name] = preset;
-        SettingsChanged?.Invoke();
         return null;
     }
 
@@ -205,7 +222,9 @@ public sealed class FanController
     {
         lock (_lock)
         {
-            foreach (var (name, preset) in s.Presets) _userPresets[name] = preset;
+            // fan-state.json is trusted no more than the API that wrote it: same limits on load.
+            foreach (var (name, preset) in s.Presets.Take(MaxUserPresets))
+                if (preset is not null && Validate(name, preset) is null) _userPresets[name] = preset;
             foreach (var (name, pct) in s.Manual)
                 if (_o.Channels.Any(c => c.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
                     _manual[name] = Math.Clamp(pct, 0, 100);

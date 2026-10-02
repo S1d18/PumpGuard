@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Security.Principal;
-using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using PumpGuard.Core;
@@ -14,28 +13,41 @@ if (args.Contains("--identify-fans"))
 if (args.Length >= 3 && args[0] == "--test-fan")
     return TestFan(args[1], args[2..].Select(a => double.Parse(a, CultureInfo.InvariantCulture)).ToArray());
 
-var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+// The safety loop is the host; the HTTP API runs inside it as ApiHost, so a busy port cannot stop protection.
+var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
 {
-    Args = args.Where(a => a != "--dry-run").ToArray(),
+    Args = [],
     ContentRootPath = AppContext.BaseDirectory,
 });
 
 // Exactly one safety config is loaded: JSON arrays merge by index across files, so layering them would
 // silently mix rules. The machine config lives outside the install folder and survives reinstalls.
+// --config <file> (for testing) replaces it.
 var machineConfig = Path.Combine(FanSettingsStore.DataDir, "config.json");
-builder.Configuration.AddJsonFile(File.Exists(machineConfig) ? machineConfig : Path.Combine(AppContext.BaseDirectory, "config.default.json"), optional: false);
-builder.Configuration.AddCommandLine(args.Where(a => a != "--dry-run").ToArray());
+var settingArgs = args.ToList();
+string? configArg = null;
+if (settingArgs.IndexOf("--config") is var ci and >= 0 && ci + 1 < settingArgs.Count)
+{
+    configArg = Path.GetFullPath(settingArgs[ci + 1]);
+    settingArgs.RemoveRange(ci, 2);
+}
+settingArgs.Remove("--dry-run");
+builder.Configuration.AddJsonFile(configArg
+    ?? (File.Exists(machineConfig) ? machineConfig : Path.Combine(AppContext.BaseDirectory, "config.default.json")), optional: false);
+// Then --Section:Key=value overrides, e.g. --PumpGuard:ApiUrl=http://127.0.0.1:8766
+builder.Configuration.AddCommandLine(settingArgs.ToArray());
 if (args.Contains("--dry-run")) builder.Configuration["PumpGuard:DryRun"] = "true";
 
-builder.Host.UseWindowsService(o => o.ServiceName = "PumpGuard");
+builder.Services.AddWindowsService(o => o.ServiceName = "PumpGuard");
 builder.Services.Configure<PumpGuardOptions>(builder.Configuration.GetSection("PumpGuard"));
 builder.Services.Configure<FanControlOptions>(builder.Configuration.GetSection("FanControl"));
-builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 
 builder.Services.AddSingleton<LhmHardware>();
 builder.Services.AddSingleton<ISensorSource>(sp => sp.GetRequiredService<LhmHardware>());
 builder.Services.AddSingleton<IFanControl>(sp => sp.GetRequiredService<LhmHardware>());
-builder.Services.AddSingleton<ISensorSource, NvmlSensorSource>();
+builder.Services.AddSingleton<NvmlSensorSource>();
+builder.Services.AddSingleton<ISensorSource>(sp => sp.GetRequiredService<NvmlSensorSource>());
+builder.Services.AddSingleton<GpuDiscovery>();
 builder.Services.AddSingleton(sp => new SafetyMonitor(sp.GetRequiredService<IOptions<PumpGuardOptions>>().Value));
 builder.Services.AddSingleton(sp =>
 {
@@ -50,13 +62,9 @@ builder.Services.AddSingleton<StatusHub>();
 builder.Services.AddSingleton<Simulation>();
 builder.Services.AddSingleton<IShutdownExecutor, WindowsShutdownExecutor>();
 builder.Services.AddHostedService<MonitorWorker>();
+builder.Services.AddHostedService<ApiHost>();
 
-var apiUrl = builder.Configuration.GetSection("PumpGuard").Get<PumpGuardOptions>()?.ApiUrl ?? new PumpGuardOptions().ApiUrl;
-builder.WebHost.UseUrls(apiUrl);
-
-var app = builder.Build();
-app.MapPumpGuardApi();
-app.Run();
+builder.Build().Run();
 return 0;
 
 static int ListSensors()
