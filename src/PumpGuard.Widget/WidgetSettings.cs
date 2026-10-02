@@ -11,8 +11,16 @@ public enum BarEdge { Top, Bottom, Left, Right }
 
 public sealed class WidgetSettings
 {
-    private static readonly string Dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "PumpGuard");
-    private static readonly string FilePath = Path.Combine(Dir, "widget.json");
+    private static readonly string DefaultPath =
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "PumpGuard", "widget.json");
+
+    /// <summary>
+    /// Settings file in use. --settings &lt;file&gt; points a test instance elsewhere, so it can never overwrite the
+    /// user's own widget.json (the widget saves its settings whenever it moves).
+    /// </summary>
+    public static string FilePath { get; set; } = DefaultPath;
+
+    public static bool IsDefaultFile => string.Equals(Path.GetFullPath(FilePath), DefaultPath, StringComparison.OrdinalIgnoreCase);
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, Converters = { new JsonStringEnumConverter() } };
 
     public string ApiUrl { get; set; } = "http://127.0.0.1:8765";
@@ -46,14 +54,13 @@ public sealed class WidgetSettings
     {
         try
         {
-            Directory.CreateDirectory(Dir);
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(FilePath))!);
             File.WriteAllText(FilePath, JsonSerializer.Serialize(this, Json));
         }
         catch { /* not worth interrupting the widget */ }
     }
 }
 
-/// <summary>Per-user "run at logon" entry for the widget. The service itself starts with Windows on its own.</summary>
 /// <summary>%APPDATA%\PumpGuard\widget.log — widget errors, capped at ~1 MB.</summary>
 public static class WidgetLog
 {
@@ -72,6 +79,7 @@ public static class WidgetLog
     }
 }
 
+/// <summary>Per-user "run at logon" entry for the widget. The service itself starts with Windows on its own.</summary>
 public static class Autostart
 {
     private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";

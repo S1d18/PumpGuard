@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 
 namespace PumpGuard.Widget;
@@ -8,7 +9,11 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
-        _single = new Mutex(true, @"Local\PumpGuardWidget", out var first);
+        if (Array.IndexOf(e.Args, "--settings") is var i and >= 0 && i + 1 < e.Args.Length)
+            WidgetSettings.FilePath = Path.GetFullPath(e.Args[i + 1]);
+        // One widget per settings file: a test instance with its own --settings runs beside the user's widget.
+        var name = WidgetSettings.IsDefaultFile ? "PumpGuardWidget" : $"PumpGuardWidget-{(uint)WidgetSettings.FilePath.ToLowerInvariant().GetHashCode():x8}";
+        _single = new Mutex(true, $@"Local\{name}", out var first);
         if (!first)
         {
             Shutdown();
