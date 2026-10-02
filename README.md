@@ -258,3 +258,12 @@ dotnet run --project src/PumpGuard.Service -- --dry-run --PumpGuard:ApiUrl=http:
   - `src/PumpGuard.Core` — логика без ввода-вывода: `SafetyMonitor` (когда выключать), `FanController` (скорость вентиляторов), `Gpus` (обнаружение и пороги видеокарт).
   - `src/PumpGuard.Service` — датчики (`Hardware/`), цикл мониторинга, API (`ApiHost`), выключение.
   - `src/PumpGuard.Widget` — WPF-виджет.
+
+## Лицензия
+
+[MIT](LICENSE). Используемые компоненты:
+- [LibreHardwareMonitorLib](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) — MPL-2.0, подключается как NuGet-пакет без изменений;
+- драйвер [PawnIO](https://pawnio.eu) — ставится отдельно;
+- NVIDIA NVML (`nvml.dll`) — часть драйвера NVIDIA, в репозиторий не входит.
+
+PumpGuard — программная защита без гарантий. Выключение ПК по тревоге может стоить несохранённых данных, а при зависании Windows защита не сработает. Не отключайте аппаратную защиту в BIOS.
